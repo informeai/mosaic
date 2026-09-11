@@ -10,11 +10,15 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// chunkAndCompress splits raw into content-defined chunks and zstd-
+// ChunkAndCompress splits raw into content-defined chunks and zstd-
 // compresses each unique one. It returns the full ordered list of chunk
 // hashes (as they occur in the file, duplicates included — this is the
 // reconstruction order) plus the compressed bytes for each distinct hash.
-func chunkAndCompress(raw []byte) (chunkHashes []Hash, units map[Hash][]byte, err error) {
+//
+// Exported so alternate stores (e.g. a SQLite-backed one) outside this
+// package can produce chunks the same way Encode/EncodeBundle do, without
+// duplicating the chunking/compression logic.
+func ChunkAndCompress(raw []byte) (chunkHashes []Hash, units map[Hash][]byte, err error) {
 	enc, err := zstd.NewWriter(nil)
 	if err != nil {
 		return nil, nil, err
@@ -23,7 +27,7 @@ func chunkAndCompress(raw []byte) (chunkHashes []Hash, units map[Hash][]byte, er
 
 	units = map[Hash][]byte{}
 	err = splitChunks(bytes.NewReader(raw), func(data []byte) error {
-		h := hashBytes(data)
+		h := HashBytes(data)
 		chunkHashes = append(chunkHashes, h)
 		if _, ok := units[h]; ok {
 			return nil // repeated inside this file — already queued
@@ -52,7 +56,7 @@ func Encode(inputPath, patternDir string) (*Manifest, error) {
 		return nil, err
 	}
 
-	chunkHashes, units, err := chunkAndCompress(raw)
+	chunkHashes, units, err := ChunkAndCompress(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +78,7 @@ func Encode(inputPath, patternDir string) (*Manifest, error) {
 	m := &Manifest{
 		Name:        filepath.Base(inputPath),
 		Size:        int64(len(raw)),
-		FileHash:    hashBytes(raw),
+		FileHash:    HashBytes(raw),
 		ChunkHashes: chunkHashes,
 	}
 

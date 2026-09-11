@@ -28,7 +28,7 @@ func EncodeBundle(inputPath string) (*Bundle, error) {
 		return nil, err
 	}
 
-	chunkHashes, units, err := chunkAndCompress(raw)
+	chunkHashes, units, err := ChunkAndCompress(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func EncodeBundle(inputPath string) (*Bundle, error) {
 		Manifest: Manifest{
 			Name:        filepath.Base(inputPath),
 			Size:        int64(len(raw)),
-			FileHash:    hashBytes(raw),
+			FileHash:    HashBytes(raw),
 			ChunkHashes: chunkHashes,
 		},
 		Chunks: chunks,
@@ -76,7 +76,7 @@ func DecodeBundle(b *Bundle, store *Store) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("mosaic: chunk %s failed to decompress: %w", h, err)
 		}
-		if hashBytes(raw) != h {
+		if HashBytes(raw) != h {
 			return nil, fmt.Errorf("mosaic: chunk %s failed its integrity check (corrupted or tampered)", h)
 		}
 		if err := store.Put(h, raw); err != nil {
@@ -97,7 +97,7 @@ func DecodeBundle(b *Bundle, store *Store) ([]byte, error) {
 		}
 		buf.Write(data)
 	}
-	if hashBytes(buf.Bytes()) != b.FileHash {
+	if HashBytes(buf.Bytes()) != b.FileHash {
 		return nil, fmt.Errorf("mosaic: reconstructed file does not match file_hash — corrupted or tampered")
 	}
 	return buf.Bytes(), nil

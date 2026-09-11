@@ -12,7 +12,8 @@ import (
 // same Hash — that equality is what deduplication is built on.
 type Hash [32]byte
 
-func hashBytes(b []byte) Hash {
+// HashBytes returns the content hash of b.
+func HashBytes(b []byte) Hash {
 	return Hash(sha256.Sum256(b))
 }
 

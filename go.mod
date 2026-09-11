@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/klauspost/compress v1.20.0
 	github.com/restic/chunker v0.5.0
+	modernc.org/sqlite v1.58.0
 )
 
 require (
@@ -17,5 +18,4 @@ require (
 	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.58.0 // indirect
 )

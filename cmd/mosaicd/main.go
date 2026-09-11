@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 
 	"mosaic"
+	"mosaic/sqlitestore"
 )
 
 // maxUploadBytes caps requests: this is meant for small-to-medium files
@@ -36,7 +37,7 @@ func main() {
 	dbPath := flag.String("db", "mosaic.db", "path to the shared SQLite database backing /manifests")
 	flag.Parse()
 
-	db, err := mosaic.OpenDB(*dbPath)
+	db, err := sqlitestore.OpenDB(*dbPath)
 	if err != nil {
 		log.Fatalf("open db %s: %v", *dbPath, err)
 	}
@@ -58,7 +59,7 @@ func main() {
 }
 
 type server struct {
-	db *mosaic.DB
+	db *sqlitestore.DB
 }
 
 // createManifest: POST /manifests, multipart field "file" -> stores the
@@ -85,7 +86,7 @@ func (s *server) createManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summary, err := mosaic.EncodeToDB(s.db, header.Filename, raw)
+	summary, err := sqlitestore.EncodeToDB(s.db, header.Filename, raw)
 	if err != nil {
 		http.Error(w, "encode failed: "+err.Error(), http.StatusUnprocessableEntity)
 		return
@@ -99,7 +100,7 @@ func (s *server) createManifest(w http.ResponseWriter, r *http.Request) {
 
 // listManifests: GET /manifests -> JSON array of {id, name, size, created_at}.
 func (s *server) listManifests(w http.ResponseWriter, r *http.Request) {
-	list, err := mosaic.ListManifests(s.db)
+	list, err := sqlitestore.ListManifests(s.db)
 	if err != nil {
 		log.Printf("list manifests failed: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -116,7 +117,7 @@ func (s *server) listManifests(w http.ResponseWriter, r *http.Request) {
 func (s *server) getManifest(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	summary, data, err := mosaic.DecodeFromDB(s.db, id)
+	summary, data, err := sqlitestore.DecodeFromDB(s.db, id)
 	if err != nil {
 		http.Error(w, "decode failed: "+err.Error(), http.StatusNotFound)
 		return

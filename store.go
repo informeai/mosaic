@@ -34,7 +34,7 @@ func (s *Store) Has(h Hash) bool {
 }
 
 // Put saves data under h. Callers are expected to have already verified
-// hashBytes(data) == h; Put itself does not re-check, so it stays cheap to
+// HashBytes(data) == h; Put itself does not re-check, so it stays cheap to
 // call from a hot loop. Writing is a no-op if the chunk is already there.
 func (s *Store) Put(h Hash, data []byte) error {
 	if s.Has(h) {

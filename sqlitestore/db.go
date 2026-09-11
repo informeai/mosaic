@@ -1,4 +1,9 @@
-package mosaic
+// Package sqlitestore is a SQLite-backed manifest/chunk store for mosaic.
+// It is kept separate from the root mosaic package so that importing
+// mosaic's core chunking/encode/decode logic never pulls in the SQLite
+// driver (and its cgo-free but still sizeable dependency tree) — only code
+// that actually needs a shared, id-addressed store imports this package.
+package sqlitestore
 
 import (
 	"bytes"
@@ -8,6 +13,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	_ "modernc.org/sqlite"
+
+	"mosaic"
 )
 
 // DB is a SQLite-backed content store: chunks keyed by hash, plus one
@@ -55,7 +62,7 @@ func OpenDB(path string) (*DB, error) {
 
 	if _, err := sqlDB.Exec(schema); err != nil {
 		sqlDB.Close()
-		return nil, fmt.Errorf("mosaic: migrating db: %w", err)
+		return nil, fmt.Errorf("mosaic/sqlitestore: migrating db: %w", err)
 	}
 	return &DB{sql: sqlDB}, nil
 }
@@ -93,7 +100,7 @@ func scanManifestSummary(scan func(dest ...any) error) (*ManifestSummary, error)
 // it. Encoding identical content twice is a no-op beyond the first time —
 // same id comes back, nothing rewritten, the original name wins.
 func EncodeToDB(db *DB, name string, raw []byte) (*ManifestSummary, error) {
-	id := hashBytes(raw).String()
+	id := mosaic.HashBytes(raw).String()
 
 	existing, err := scanManifestSummary(db.sql.QueryRow(
 		`SELECT id, name, size, created_at FROM manifests WHERE id = ?`, id).Scan)
@@ -104,7 +111,7 @@ func EncodeToDB(db *DB, name string, raw []byte) (*ManifestSummary, error) {
 		return nil, err
 	}
 
-	chunkHashes, units, err := chunkAndCompress(raw)
+	chunkHashes, units, err := mosaic.ChunkAndCompress(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +179,7 @@ func DecodeFromDB(db *DB, id string) (*ManifestSummary, []byte, error) {
 	m, err := scanManifestSummary(db.sql.QueryRow(
 		`SELECT id, name, size, created_at FROM manifests WHERE id = ?`, id).Scan)
 	if err == sql.ErrNoRows {
-		return nil, nil, fmt.Errorf("mosaic: no manifest with id %q", id)
+		return nil, nil, fmt.Errorf("mosaic/sqlitestore: no manifest with id %q", id)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -202,20 +209,20 @@ func DecodeFromDB(db *DB, id string) (*ManifestSummary, []byte, error) {
 		if err := rows.Scan(&hashHex, &compressed); err != nil {
 			return nil, nil, err
 		}
-		h, err := ParseHash(hashHex)
+		h, err := mosaic.ParseHash(hashHex)
 		if err != nil {
 			return nil, nil, err
 		}
 		if compressed == nil {
-			return nil, nil, fmt.Errorf("mosaic: manifest %q references missing chunk %s", id, h)
+			return nil, nil, fmt.Errorf("mosaic/sqlitestore: manifest %q references missing chunk %s", id, h)
 		}
 
 		raw, err := dec.DecodeAll(compressed, nil)
 		if err != nil {
-			return nil, nil, fmt.Errorf("mosaic: chunk %s failed to decompress: %w", h, err)
+			return nil, nil, fmt.Errorf("mosaic/sqlitestore: chunk %s failed to decompress: %w", h, err)
 		}
-		if hashBytes(raw) != h {
-			return nil, nil, fmt.Errorf("mosaic: chunk %s failed its integrity check (corrupted or tampered)", h)
+		if mosaic.HashBytes(raw) != h {
+			return nil, nil, fmt.Errorf("mosaic/sqlitestore: chunk %s failed its integrity check (corrupted or tampered)", h)
 		}
 		buf.Write(raw)
 	}
@@ -223,12 +230,12 @@ func DecodeFromDB(db *DB, id string) (*ManifestSummary, []byte, error) {
 		return nil, nil, err
 	}
 
-	fileHash, err := ParseHash(id)
+	fileHash, err := mosaic.ParseHash(id)
 	if err != nil {
-		return nil, nil, fmt.Errorf("mosaic: manifest id %q is not a valid hash", id)
+		return nil, nil, fmt.Errorf("mosaic/sqlitestore: manifest id %q is not a valid hash", id)
 	}
-	if hashBytes(buf.Bytes()) != fileHash {
-		return nil, nil, fmt.Errorf("mosaic: reconstructed file does not match manifest id — corrupted or tampered")
+	if mosaic.HashBytes(buf.Bytes()) != fileHash {
+		return nil, nil, fmt.Errorf("mosaic/sqlitestore: reconstructed file does not match manifest id — corrupted or tampered")
 	}
 
 	return m, buf.Bytes(), nil

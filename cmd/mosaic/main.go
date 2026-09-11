@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"mosaic"
+	"mosaic/sqlitestore"
 )
 
 func main() {
@@ -131,14 +132,14 @@ func runListCmd(args []string) {
 	dbPath := fs.String("db", "mosaic.db", "path to the shared SQLite database")
 	fs.Parse(args)
 
-	db, err := mosaic.OpenDB(*dbPath)
+	db, err := sqlitestore.OpenDB(*dbPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open db failed:", err)
 		os.Exit(1)
 	}
 	defer db.Close()
 
-	list, err := mosaic.ListManifests(db)
+	list, err := sqlitestore.ListManifests(db)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "list failed:", err)
 		os.Exit(1)
@@ -191,7 +192,7 @@ func runEncodeBundle(input, outputFile string) {
 }
 
 func runEncodeDB(dbPath, input string) {
-	db, err := mosaic.OpenDB(dbPath)
+	db, err := sqlitestore.OpenDB(dbPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open db failed:", err)
 		os.Exit(1)
@@ -204,7 +205,7 @@ func runEncodeDB(dbPath, input string) {
 		os.Exit(1)
 	}
 
-	summary, err := mosaic.EncodeToDB(db, filepath.Base(input), raw)
+	summary, err := sqlitestore.EncodeToDB(db, filepath.Base(input), raw)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "encode failed:", err)
 		os.Exit(1)
@@ -272,14 +273,14 @@ func runDecodeBundle(bundlePath, output, storeDir string) {
 }
 
 func runDecodeDB(dbPath, id, output string) {
-	db, err := mosaic.OpenDB(dbPath)
+	db, err := sqlitestore.OpenDB(dbPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open db failed:", err)
 		os.Exit(1)
 	}
 	defer db.Close()
 
-	summary, data, err := mosaic.DecodeFromDB(db, id)
+	summary, data, err := sqlitestore.DecodeFromDB(db, id)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "decode failed:", err)
 		os.Exit(1)

@@ -49,7 +49,7 @@ func Decode(patternDir string, store *Store) (*Manifest, []byte, error) {
 		if err != nil {
 			return &m, nil, fmt.Errorf("mosaic: unit %s failed to decompress: %w", h, err)
 		}
-		if hashBytes(raw) != h {
+		if HashBytes(raw) != h {
 			return &m, nil, fmt.Errorf("mosaic: unit %s failed its integrity check (corrupted or tampered)", h)
 		}
 		if err := store.Put(h, raw); err != nil {
@@ -71,7 +71,7 @@ func Decode(patternDir string, store *Store) (*Manifest, []byte, error) {
 		buf.Write(data)
 	}
 
-	if hashBytes(buf.Bytes()) != m.FileHash {
+	if HashBytes(buf.Bytes()) != m.FileHash {
 		return &m, nil, fmt.Errorf("mosaic: reconstructed file does not match file_hash — corrupted or tampered")
 	}
 

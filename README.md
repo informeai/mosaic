@@ -43,8 +43,28 @@ across versions of the same file, not just inside a single one.
 | SQLite database | `EncodeToDB` / `DecodeFromDB` / `ListManifests` | A CLI and an API need to share the same store, addressed by a short id |
 
 All three share the same chunking, hashing, and compression underneath
-(`chunkAndCompress` in `encode.go`) — they're just different ways of
+(`ChunkAndCompress` in `encode.go`) — they're just different ways of
 carrying the same chunks around.
+
+## Package layout
+
+The core (`chunk.go`, `encode.go`, `decode.go`, `manifest.go`, `bundle.go`,
+`store.go`, package `mosaic`) has no dependency on SQLite or on anything
+CLI/HTTP-specific — `go get`-ing it into another project pulls in only
+`klauspost/compress` and `restic/chunker`.
+
+The SQLite-backed store lives in its own subpackage, `mosaic/sqlitestore`,
+so that only code that actually needs an id-addressed shared store (the
+CLI's `--db` mode, `mosaicd`'s `/manifests` endpoints) pays for that
+dependency:
+
+```go
+import "mosaic"              // Encode, Decode, EncodeBundle, DecodeBundle, Store
+import "mosaic/sqlitestore"  // OpenDB, EncodeToDB, DecodeFromDB, ListManifests
+```
+
+`cmd/mosaic` and `cmd/mosaicd` are themselves just callers of these two
+packages — no reconstruction logic of their own.
 
 ## Install
 
