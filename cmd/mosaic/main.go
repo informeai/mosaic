@@ -31,6 +31,8 @@ func main() {
 		runDecodeCmd(os.Args[2:])
 	case "list":
 		runListCmd(os.Args[2:])
+	case "qr-url":
+		runQRURLCmd(os.Args[2:])
 	default:
 		usage()
 	}
@@ -45,6 +47,7 @@ func usage() {
   mosaic decode --db <db-path> <manifest-id> <output-file>
   mosaic decode --qr <qr-dir> <output-file> [store-dir]
   mosaic list --db <db-path>
+  mosaic qr-url <url> <output.png>
 
 Without flags, encode writes a pattern directory:
   <output>/manifest.json + <output>/chunks/*.unit
@@ -66,7 +69,14 @@ With --qr, encode writes a sequence of QR-code PNGs to <output-dir>
 one after another (or print them) for a camera on the other side to
 scan. decode reads *.png from <qr-dir>, in any order, from any subset
 that later completes — same resumable behavior as the default mode,
-just at the level of QR frames instead of chunks.`)
+just at the level of QR frames instead of chunks.
+
+qr-url is unrelated to reconstruction: it renders a single QR-code PNG
+that just encodes the text you give it (no framing, no chunking) — for
+when a mosaicd server is already reachable on the network and the QR
+only needs to point at it, e.g.:
+
+  mosaic qr-url http://192.168.1.50:8085/manifests/<id> download.png`)
 	os.Exit(2)
 }
 
@@ -203,6 +213,19 @@ func runEncodeQR(input, outDir string) {
 		os.Exit(1)
 	}
 	fmt.Printf("encoded %q: %d bytes -> %d QR frames in %s\n", b.Name, b.Size, total, outDir)
+}
+
+func runQRURLCmd(args []string) {
+	if len(args) != 2 {
+		usage()
+	}
+	text, output := args[0], args[1]
+
+	if err := qrcode.EncodeText(text, output); err != nil {
+		fmt.Fprintln(os.Stderr, "encode failed:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("wrote %s (%d bytes of text)\n", output, len(text))
 }
 
 func runEncodeBundle(input, outputFile string) {

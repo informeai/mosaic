@@ -60,6 +60,53 @@ var decodeHints = map[gozxing.DecodeHintType]interface{}{
 	gozxing.DecodeHintType_PURE_BARCODE: true,
 }
 
+// textEncodeHints intentionally omits CHARACTER_SET: EncodeText's input is
+// meant to be human/URL text, not arbitrary bytes, so the writer's own
+// default encoding (effectively UTF-8/ASCII for anything URL-safe) is
+// exactly what a normal phone QR scanner expects — the ISO-8859-1 mapping
+// EncodeToQR needs for raw frame bytes would only get in the way here.
+var textEncodeHints = map[gozxing.EncodeHintType]interface{}{
+	gozxing.EncodeHintType_ERROR_CORRECTION: decoder.ErrorCorrectionLevel_M,
+	gozxing.EncodeHintType_MARGIN:           1,
+}
+
+// EncodeText renders text — typically a URL pointing at a mosaicd
+// /manifests/{id} endpoint already reachable on the network — as a single
+// QR-code PNG at path. Unlike EncodeToQR, nothing is framed, chunked, or
+// split: this is the "point at the server, don't carry the file" case,
+// where the data itself never needs to cross the optical channel — only
+// a link to where it already lives does.
+func EncodeText(text, path string) error {
+	matrix, err := qrcode.NewQRCodeWriter().Encode(text, gozxing.BarcodeFormat_QR_CODE, imageSize, imageSize, textEncodeHints)
+	if err != nil {
+		return fmt.Errorf("mosaic/qrcode: encoding text: %w", err)
+	}
+	return writePNG(path, matrix)
+}
+
+// DecodeText reads back a QR-code PNG written by EncodeText and returns
+// the text it encodes.
+func DecodeText(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	img, err := png.Decode(f)
+	f.Close()
+	if err != nil {
+		return "", err
+	}
+	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
+	if err != nil {
+		return "", err
+	}
+	result, err := qrcode.NewQRCodeReader().Decode(bmp, decodeHints)
+	if err != nil {
+		return "", fmt.Errorf("mosaic/qrcode: decoding %s: %w", path, err)
+	}
+	return result.GetText(), nil
+}
+
 // EncodeToQR bundles inputPath exactly like mosaic.EncodeBundle, then
 // splits that self-contained Bundle's JSON into DefaultFrameSize-byte
 // frames and renders each as its own QR-code PNG in outDir (0000.png,

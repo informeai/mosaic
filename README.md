@@ -138,6 +138,16 @@ Decoding from a partial set of frames reports `N/M frames captured`
 instead of failing outright, same as the default directory mode does for
 chunks.
 
+**qr-url** — unrelated to reconstruction: renders a single QR-code PNG
+that just encodes whatever text you give it, no framing or chunking. For
+when `mosaicd` is already reachable on the network and the QR only needs
+to point at it (see the HTTP API section below) rather than carry the
+file itself:
+
+```
+mosaic qr-url http://192.168.1.50:8085/manifests/<id> download.png
+```
+
 ## HTTP API (`mosaicd`)
 
 ```
@@ -163,6 +173,14 @@ curl -F file=@photo.png http://localhost:8085/manifests
 curl http://localhost:8085/manifests
 curl http://localhost:8085/manifests/<id> -o photo-reconstructed.png
 ```
+
+Sharing `GET /manifests/{id}` as a QR code (`mosaic qr-url`) is a fast
+local-network alternative to `--qr`: the file's content never crosses the
+optical channel, only a link to where it already lives on the server —
+reconstruction is a hash lookup + zstd decompress away, not a re-chunking,
+so it stays fast (milliseconds, not the many QR frames `--qr` needs for
+anything beyond a tiny file). It trades the "no network at all" property
+of `--qr`/`--db`-less transfer for speed and a much smaller code.
 
 ## Tests
 

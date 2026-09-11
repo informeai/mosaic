@@ -10,6 +10,24 @@ import (
 	"mosaic"
 )
 
+func TestTextRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "url.png")
+	url := "http://192.168.0.19:8085/manifests/8c78dc438ab497281b2296a6f9db720ce68a37916e1236742ce63e63d927d4b0"
+
+	if err := EncodeText(url, path); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := DecodeText(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != url {
+		t.Fatalf("decoded text does not match: got %q, want %q", got, url)
+	}
+}
+
 func randomBytes(t *testing.T, n int) []byte {
 	t.Helper()
 	b := make([]byte, n)
