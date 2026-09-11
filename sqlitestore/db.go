@@ -113,6 +113,13 @@ const insertBatchSize = 300
 // ~64KiB instead cuts the chunk count, and every one of those per-chunk
 // costs, by roughly the same ~32x — at the price of coarser
 // deduplication (an edit now reshuffles a larger neighborhood).
+//
+// Measured (1GB random file): going from ~2KiB to ~64KiB avg cut encode
+// 27.4s->7.1s and decode 19.8s->5.2s. Pushing further to ~128KiB avg only
+// bought another ~2-5% on encode and ~16% on decode — the per-chunk fixed
+// overhead this is cutting is largely gone by 64KiB, and byte-level work
+// (decompression, hashing) doesn't shrink with fewer/bigger chunks, so the
+// curve flattens. Not worth trading more dedup granularity for that.
 var chunkSize = mosaic.ChunkSize{Min: 16 << 10, Max: 128 << 10, AvgBits: 16} // ~64KiB average
 
 // execBatch runs one multi-row "insertPrefix VALUES (?,...),(?,...),..."
