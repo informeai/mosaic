@@ -104,6 +104,17 @@ func scanManifestSummary(scan func(dest ...any) error) (*ManifestSummary, error)
 // params/row: 300 rows * 3 = 900.
 const insertBatchSize = 300
 
+// chunkSize is deliberately much larger than mosaic.DefaultChunkSize: that
+// default is calibrated for a per-unit transport budget (a QR code) this
+// store doesn't have. Every chunk costs a SQL row, a compress/decompress
+// call, and a hash check regardless of its size — profiling a 1GB
+// reconstruction showed that cost is dominated by how many chunks there
+// are (~488k at the ~2KiB default), not by bytes processed. Averaging
+// ~64KiB instead cuts the chunk count, and every one of those per-chunk
+// costs, by roughly the same ~32x — at the price of coarser
+// deduplication (an edit now reshuffles a larger neighborhood).
+var chunkSize = mosaic.ChunkSize{Min: 16 << 10, Max: 128 << 10, AvgBits: 16} // ~64KiB average
+
 // execBatch runs one multi-row "insertPrefix VALUES (?,...),(?,...),..."
 // built from rows, each supplying exactly placeholdersPerRow args. This is
 // what keeps writing a large file's chunks (or a large manifest's chunk
@@ -159,7 +170,7 @@ func EncodeToDB(db *DB, name string, src io.Reader) (*ManifestSummary, error) {
 		return nil
 	}
 
-	fileHash, chunkHashes, size, err := mosaic.ChunkAndCompressReader(src, func(h mosaic.Hash, compressed []byte) error {
+	fileHash, chunkHashes, size, err := mosaic.ChunkAndCompressReader(src, chunkSize, func(h mosaic.Hash, compressed []byte) error {
 		pending = append(pending, []any{h.String(), compressed})
 		if len(pending) >= insertBatchSize {
 			return flushChunks()

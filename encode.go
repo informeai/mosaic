@@ -24,7 +24,7 @@ import (
 // included — reconstruction needs that full sequence — but a duplicate is
 // not recompressed or handed to onChunk again. size is the total bytes
 // read from r (i.e. the original file size).
-func ChunkAndCompressReader(r io.Reader, onChunk func(h Hash, compressed []byte) error) (fileHash Hash, chunkHashes []Hash, size int64, err error) {
+func ChunkAndCompressReader(r io.Reader, size ChunkSize, onChunk func(h Hash, compressed []byte) error) (fileHash Hash, chunkHashes []Hash, totalSize int64, err error) {
 	enc, err := zstd.NewWriter(nil)
 	if err != nil {
 		return Hash{}, nil, 0, err
@@ -34,8 +34,8 @@ func ChunkAndCompressReader(r io.Reader, onChunk func(h Hash, compressed []byte)
 	hasher := sha256.New()
 	seen := map[Hash]bool{}
 
-	err = splitChunks(io.TeeReader(r, hasher), func(data []byte) error {
-		size += int64(len(data))
+	err = splitChunks(io.TeeReader(r, hasher), size, func(data []byte) error {
+		totalSize += int64(len(data))
 		h := HashBytes(data)
 		chunkHashes = append(chunkHashes, h)
 		if seen[h] {
@@ -49,7 +49,7 @@ func ChunkAndCompressReader(r io.Reader, onChunk func(h Hash, compressed []byte)
 	}
 
 	copy(fileHash[:], hasher.Sum(nil))
-	return fileHash, chunkHashes, size, nil
+	return fileHash, chunkHashes, totalSize, nil
 }
 
 // ChunkAndCompress splits raw into content-defined chunks and zstd-
@@ -66,7 +66,7 @@ func ChunkAndCompressReader(r io.Reader, onChunk func(h Hash, compressed []byte)
 // ChunkAndCompressReader instead.
 func ChunkAndCompress(raw []byte) (chunkHashes []Hash, units map[Hash][]byte, err error) {
 	units = map[Hash][]byte{}
-	_, chunkHashes, _, err = ChunkAndCompressReader(bytes.NewReader(raw), func(h Hash, compressed []byte) error {
+	_, chunkHashes, _, err = ChunkAndCompressReader(bytes.NewReader(raw), DefaultChunkSize, func(h Hash, compressed []byte) error {
 		units[h] = compressed
 		return nil
 	})

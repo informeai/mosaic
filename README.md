@@ -45,7 +45,16 @@ across versions of the same file, not just inside a single one.
 
 The first three share the same chunking, hashing, and compression
 underneath (`ChunkAndCompress` in `encode.go`) — they're just different
-ways of carrying the same chunks around. The QR shape works one level up:
+ways of carrying the same chunks around, though not necessarily at the
+same `ChunkSize`: the directory/Bundle shapes use `DefaultChunkSize`
+(~2KiB average, calibrated for a per-unit transport budget like a QR
+code), while `sqlitestore` uses a larger one (~64KiB average) since a
+database row has no such constraint and every chunk costs a SQL row, a
+compress/decompress call, and a hash check regardless of its size —
+profiling a 1GB reconstruction found that cost dominated by chunk count,
+not bytes, so fewer/bigger chunks cut it proportionally (at the price of
+coarser deduplication: an edit reshuffles a larger neighborhood). The QR
+shape works one level up:
 it re-frames a whole Bundle's JSON into small, fixed-size, self-describing
 pieces sized for reliable scanning, independent of the file's own chunk
 sizes (see `qrcode/qrcode.go` for why).
