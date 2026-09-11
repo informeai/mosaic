@@ -7,10 +7,10 @@ references — in any order, from any subset that later completes, and
 skipping anything already known.
 
 The reconstruction logic is deliberately decoupled from any transport.
-Today the "pattern" produced by encoding is a directory of files, a
-self-contained JSON document, or rows in a SQLite database — not a QR
-code, a printed sheet, or a network call. Any of those can be layered on
-top without touching the core logic.
+The "pattern" produced by encoding can be a directory of files, a
+self-contained JSON document, rows in a SQLite database, or a sequence of
+QR-code images — any of these layer on top without touching the core
+logic.
 
 ## Why content-defined chunking
 
@@ -38,13 +38,17 @@ across versions of the same file, not just inside a single one.
 
 | Shape | Produced/read by | Use it when |
 |---|---|---|
-| Pattern directory (`manifest.json` + `chunks/*.unit`) | `Encode` / `Decode` | Files are the transport (disk, a zip, eventually QR/print) |
+| Pattern directory (`manifest.json` + `chunks/*.unit`) | `Encode` / `Decode` | Files are the transport (disk, a zip) |
 | Bundle (single JSON file, chunks embedded) | `EncodeBundle` / `DecodeBundle` | One self-contained document is more convenient than a directory |
 | SQLite database | `EncodeToDB` / `DecodeFromDB` / `ListManifests` | A CLI and an API need to share the same store, addressed by a short id |
+| QR-code PNGs | `EncodeToQR` / `DecodeFromQR` (`mosaic/qrcode`) | Nothing exists between two devices but a camera — an air-gapped transfer, a printed sheet |
 
-All three share the same chunking, hashing, and compression underneath
-(`ChunkAndCompress` in `encode.go`) — they're just different ways of
-carrying the same chunks around.
+The first three share the same chunking, hashing, and compression
+underneath (`ChunkAndCompress` in `encode.go`) — they're just different
+ways of carrying the same chunks around. The QR shape works one level up:
+it re-frames a whole Bundle's JSON into small, fixed-size, self-describing
+pieces sized for reliable scanning, independent of the file's own chunk
+sizes (see `qrcode/qrcode.go` for why).
 
 ## Package layout
 
@@ -53,17 +57,18 @@ The core (`chunk.go`, `encode.go`, `decode.go`, `manifest.go`, `bundle.go`,
 CLI/HTTP-specific — `go get`-ing it into another project pulls in only
 `klauspost/compress` and `restic/chunker`.
 
-The SQLite-backed store lives in its own subpackage, `mosaic/sqlitestore`,
-so that only code that actually needs an id-addressed shared store (the
-CLI's `--db` mode, `mosaicd`'s `/manifests` endpoints) pays for that
-dependency:
+The SQLite-backed store and the QR-code renderer/reader each live in
+their own subpackage — `mosaic/sqlitestore` and `mosaic/qrcode` — so that
+only code that actually needs a shared id-addressed store, or actually
+renders/reads QR codes, pays for those dependencies:
 
 ```go
 import "mosaic"              // Encode, Decode, EncodeBundle, DecodeBundle, Store
 import "mosaic/sqlitestore"  // OpenDB, EncodeToDB, DecodeFromDB, ListManifests
+import "mosaic/qrcode"       // EncodeToQR, DecodeFromQR
 ```
 
-`cmd/mosaic` and `cmd/mosaicd` are themselves just callers of these two
+`cmd/mosaic` and `cmd/mosaicd` are themselves just callers of these
 packages — no reconstruction logic of their own.
 
 ## Install
@@ -80,9 +85,11 @@ Requires Go 1.22+ (uses `net/http`'s method/wildcard routing patterns).
 ```
 mosaic encode [--bundle] <input-file> <output>
 mosaic encode --db <db-path> <input-file>
+mosaic encode --qr <input-file> <output-dir>
 
 mosaic decode [--bundle] <input> <output-file> [store-dir]
 mosaic decode --db <db-path> <manifest-id> <output-file>
+mosaic decode --qr <qr-dir> <output-file> [store-dir]
 
 mosaic list --db <db-path>
 ```
@@ -113,6 +120,23 @@ mosaic decode --db mosaic.db "$id" photo-reconstructed.png
 
 Encoding identical content twice returns the same id — nothing is
 duplicated in the database.
+
+**QR mode** — a sequence of QR-code PNGs, meant for a transfer with no
+network between the two sides at all: display them one after another (or
+print them) for a camera to scan, and scan them back in any order, across
+as many passes as it takes:
+
+```
+mosaic encode --qr photo.png ./qr
+mosaic decode --qr ./qr photo-reconstructed.png
+```
+
+A single QR code tops out around ~2KB of binary data even at a forgiving
+error-correction level, so frames here are sized independently of the
+file's own chunk boundaries — see `mosaic/qrcode`'s package doc for why.
+Decoding from a partial set of frames reports `N/M frames captured`
+instead of failing outright, same as the default directory mode does for
+chunks.
 
 ## HTTP API (`mosaicd`)
 
@@ -147,5 +171,7 @@ go test ./...
 ```
 
 Covers round-trip reconstruction, resuming from a partial pattern,
-deduplication across two files sharing content, and the database's
-idempotent-encode behavior.
+deduplication across two files sharing content, the database's
+idempotent-encode behavior, and (in `mosaic/qrcode`) round-tripping
+through actual rendered/decoded QR-code images, including resuming from
+only half the frames.

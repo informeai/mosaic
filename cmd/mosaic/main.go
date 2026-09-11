@@ -1,9 +1,8 @@
 // Command mosaic encodes a file into a reconstruction pattern and decodes
-// that pattern back into the original file — the transport in between
-// (QR codes, a printed bitmap, an HTTP call) is deliberately out of scope
-// here. Three pattern shapes are supported: a directory (manifest.json +
-// chunks/*.unit) by default, a single self-contained Bundle JSON file
-// with --bundle, or a shared SQLite database with --db.
+// that pattern back into the original file. Four pattern shapes are
+// supported: a directory (manifest.json + chunks/*.unit) by default, a
+// single self-contained Bundle JSON file with --bundle, a shared SQLite
+// database with --db, or a sequence of QR-code PNGs with --qr.
 package main
 
 import (
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"mosaic"
+	"mosaic/qrcode"
 	"mosaic/sqlitestore"
 )
 
@@ -40,8 +40,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   mosaic encode [--bundle] <input-file> <output>
   mosaic encode --db <db-path> <input-file>
+  mosaic encode --qr <input-file> <output-dir>
   mosaic decode [--bundle] <input> <output-file> [store-dir]
   mosaic decode --db <db-path> <manifest-id> <output-file>
+  mosaic decode --qr <qr-dir> <output-file> [store-dir]
   mosaic list --db <db-path>
 
 Without flags, encode writes a pattern directory:
@@ -57,7 +59,14 @@ that same file from <input>.
 With --db, encode and decode share a SQLite database instead of any
 file-based pattern: encode prints the manifest id it was stored under
 (to stdout, so scripts can capture it), and decode reconstructs from
-that id. list shows every manifest in the database (id, name, size).`)
+that id. list shows every manifest in the database (id, name, size).
+
+With --qr, encode writes a sequence of QR-code PNGs to <output-dir>
+(0000.png, 0001.png, ...) — meant for an air-gapped transfer: show them
+one after another (or print them) for a camera on the other side to
+scan. decode reads *.png from <qr-dir>, in any order, from any subset
+that later completes — same resumable behavior as the default mode,
+just at the level of QR frames instead of chunks.`)
 	os.Exit(2)
 }
 
@@ -65,15 +74,17 @@ func runEncodeCmd(args []string) {
 	fs := flag.NewFlagSet("encode", flag.ExitOnError)
 	bundle := fs.Bool("bundle", false, "write a single self-contained Bundle JSON file instead of a pattern directory")
 	dbPath := fs.String("db", "", "encode into a shared SQLite database instead of files; prints the manifest id")
+	qr := fs.Bool("qr", false, "write a sequence of QR-code PNGs instead of a pattern directory")
 	fs.Parse(args)
 
 	rest := fs.Args()
 
+	if exclusiveModeCount(*bundle, *dbPath != "", *qr) > 1 {
+		fmt.Fprintln(os.Stderr, "--bundle, --db, and --qr are mutually exclusive")
+		os.Exit(2)
+	}
+
 	if *dbPath != "" {
-		if *bundle {
-			fmt.Fprintln(os.Stderr, "--bundle and --db are mutually exclusive")
-			os.Exit(2)
-		}
 		if len(rest) != 1 {
 			usage()
 		}
@@ -85,26 +96,41 @@ func runEncodeCmd(args []string) {
 		usage()
 	}
 	input, output := rest[0], rest[1]
-	if *bundle {
+	switch {
+	case *bundle:
 		runEncodeBundle(input, output)
-		return
+	case *qr:
+		runEncodeQR(input, output)
+	default:
+		runEncode(input, output)
 	}
-	runEncode(input, output)
+}
+
+func exclusiveModeCount(bundle, db, qr bool) int {
+	n := 0
+	for _, on := range []bool{bundle, db, qr} {
+		if on {
+			n++
+		}
+	}
+	return n
 }
 
 func runDecodeCmd(args []string) {
 	fs := flag.NewFlagSet("decode", flag.ExitOnError)
 	bundle := fs.Bool("bundle", false, "read a Bundle JSON file instead of a pattern directory")
 	dbPath := fs.String("db", "", "reconstruct from a shared SQLite database using a manifest id")
+	qr := fs.Bool("qr", false, "read a directory of QR-code PNGs instead of a pattern directory")
 	fs.Parse(args)
 
 	rest := fs.Args()
 
+	if exclusiveModeCount(*bundle, *dbPath != "", *qr) > 1 {
+		fmt.Fprintln(os.Stderr, "--bundle, --db, and --qr are mutually exclusive")
+		os.Exit(2)
+	}
+
 	if *dbPath != "" {
-		if *bundle {
-			fmt.Fprintln(os.Stderr, "--bundle and --db are mutually exclusive")
-			os.Exit(2)
-		}
 		if len(rest) != 2 {
 			usage()
 		}
@@ -120,11 +146,14 @@ func runDecodeCmd(args []string) {
 	if len(rest) == 3 {
 		storeDir = rest[2]
 	}
-	if *bundle {
+	switch {
+	case *bundle:
 		runDecodeBundle(source, output, storeDir)
-		return
+	case *qr:
+		runDecodeQR(source, output, storeDir)
+	default:
+		runDecode(source, output, storeDir)
 	}
-	runDecode(source, output, storeDir)
 }
 
 func runListCmd(args []string) {
@@ -165,6 +194,15 @@ func runEncode(input, patternDir string) {
 	}
 	fmt.Printf("encoded %q: %d bytes -> %d chunk refs (%d unique units) in %s\n",
 		m.Name, m.Size, len(m.ChunkHashes), len(m.UniqueChunks()), patternDir)
+}
+
+func runEncodeQR(input, outDir string) {
+	b, total, err := qrcode.EncodeToQR(input, outDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "encode failed:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("encoded %q: %d bytes -> %d QR frames in %s\n", b.Name, b.Size, total, outDir)
 }
 
 func runEncodeBundle(input, outputFile string) {
@@ -237,6 +275,27 @@ func runDecode(patternDir, output, storeDir string) {
 		os.Exit(1)
 	}
 	fmt.Printf("reconstructed %q -> %s (%d bytes, integrity verified)\n", m.Name, output, len(data))
+}
+
+func runDecodeQR(qrDir, output, storeDir string) {
+	store, err := mosaic.OpenStore(storeDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "store open failed:", err)
+		os.Exit(1)
+	}
+
+	have, total, data, err := qrcode.DecodeFromQR(qrDir, store)
+	if err != nil {
+		fmt.Printf("progress: %d/%d frames captured\n", have, total)
+		fmt.Fprintln(os.Stderr, "decode incomplete:", err)
+		os.Exit(1)
+	}
+
+	if err := os.WriteFile(output, data, 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "write failed:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("reconstructed -> %s (%d bytes, integrity verified)\n", output, len(data))
 }
 
 func runDecodeBundle(bundlePath, output, storeDir string) {
