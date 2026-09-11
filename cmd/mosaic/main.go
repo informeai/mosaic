@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"text/tabwriter"
@@ -260,13 +261,14 @@ func runEncodeDB(dbPath, input string) {
 	}
 	defer db.Close()
 
-	raw, err := os.ReadFile(input)
+	f, err := os.Open(input)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "read failed:", err)
+		fmt.Fprintln(os.Stderr, "open failed:", err)
 		os.Exit(1)
 	}
+	defer f.Close()
 
-	summary, err := sqlitestore.EncodeToDB(db, filepath.Base(input), raw)
+	summary, err := sqlitestore.EncodeToDB(db, filepath.Base(input), f)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "encode failed:", err)
 		os.Exit(1)
@@ -362,15 +364,24 @@ func runDecodeDB(dbPath, id, output string) {
 	}
 	defer db.Close()
 
-	summary, data, err := sqlitestore.DecodeFromDB(db, id)
+	summary, rc, err := sqlitestore.DecodeFromDB(db, id)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "decode failed:", err)
 		os.Exit(1)
 	}
+	defer rc.Close()
 
-	if err := os.WriteFile(output, data, 0o644); err != nil {
+	out, err := os.Create(output)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "write failed:", err)
 		os.Exit(1)
 	}
-	fmt.Printf("reconstructed %q -> %s (%d bytes, integrity verified)\n", summary.Name, output, len(data))
+	n, err := io.Copy(out, rc)
+	out.Close()
+	if err != nil {
+		os.Remove(output) // don't leave a partial file behind
+		fmt.Fprintln(os.Stderr, "write failed:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("reconstructed %q -> %s (%d bytes, integrity verified)\n", summary.Name, output, n)
 }

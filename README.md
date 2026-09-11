@@ -151,8 +151,13 @@ mosaic qr-url http://192.168.1.50:8085/manifests/<id> download.png
 ## HTTP API (`mosaicd`)
 
 ```
-mosaicd -addr :8085 -db mosaic.db
+mosaicd -addr :8085 -db mosaic.db -max-upload-mb 8192
 ```
+
+`-max-upload-mb` caps the request body on every endpoint (default 8192,
+i.e. 8GiB) — it's a safety net against a runaway client, not a memory
+bound: `/manifests` streams the upload straight through chunking into
+SQLite, so raising it doesn't cost more RAM, just allows bigger files.
 
 **Stateless** (nothing kept server-side beyond the request):
 
@@ -161,12 +166,21 @@ mosaicd -addr :8085 -db mosaic.db
 - `POST /decode` — a Bundle JSON body → the reconstructed file's raw
   bytes.
 
-**Database-backed** (shares `mosaic.db` with the CLI's `--db` mode):
+These two still hold their payload in memory (a Bundle is inherently
+self-contained), so treat `-max-upload-mb` more conservatively if they see
+real traffic.
+
+**Database-backed** (shares `mosaic.db` with the CLI's `--db` mode; both
+endpoints stream — memory use stays flat regardless of file size):
 
 - `POST /manifests` — multipart field `file` → `{id, name, size, created_at}`.
+  The upload is chunked and written to SQLite as it's received, in
+  batched multi-row inserts, never fully materialized in the server's
+  memory.
 - `GET /manifests` — JSON array of every stored manifest.
-- `GET /manifests/{id}` — validates every referenced chunk, reconstructs,
-  and returns the file's raw bytes.
+- `GET /manifests/{id}` — validates every referenced chunk, reconstructs
+  into a temporary file (verified in full before any byte reaches the
+  response), and streams it back.
 
 ```
 curl -F file=@photo.png http://localhost:8085/manifests

@@ -3,6 +3,7 @@ package sqlitestore
 import (
 	"bytes"
 	"crypto/rand"
+	"io"
 	"path/filepath"
 	"testing"
 )
@@ -26,7 +27,7 @@ func TestDBRoundTrip(t *testing.T) {
 
 	data := randomBytes(t, 50_000)
 
-	summary, err := EncodeToDB(db, "in.bin", data)
+	summary, err := EncodeToDB(db, "in.bin", bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +37,7 @@ func TestDBRoundTrip(t *testing.T) {
 
 	// Encoding identical content again must return the same id without
 	// erroring or duplicating anything.
-	again, err := EncodeToDB(db, "in.bin", data)
+	again, err := EncodeToDB(db, "in.bin", bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,12 +53,19 @@ func TestDBRoundTrip(t *testing.T) {
 		t.Fatalf("expected exactly 1 manifest after encoding the same content twice, got %d", len(list))
 	}
 
-	got, gotBytes, err := DecodeFromDB(db, summary.ID)
+	got, rc, err := DecodeFromDB(db, summary.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Name != "in.bin" || got.Size != int64(len(data)) {
 		t.Fatalf("unexpected manifest summary: %+v", got)
+	}
+	gotBytes, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rc.Close(); err != nil {
+		t.Fatal(err)
 	}
 	if !bytes.Equal(gotBytes, data) {
 		t.Fatal("reconstructed bytes do not match the original file")

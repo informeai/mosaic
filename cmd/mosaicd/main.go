@@ -27,15 +27,28 @@ import (
 	"mosaic/sqlitestore"
 )
 
-// maxUploadBytes caps requests: this is meant for small-to-medium files
-// (see how fast QR/page counts grow with size for /encode), not a
-// general-purpose upload service.
-const maxUploadBytes = 64 << 20 // 64MiB
+// maxUploadBytes caps the total size of any request body, across every
+// endpoint — set from -max-upload-mb at startup. It exists as a safety
+// net against a runaway/malicious client, not as a memory bound: /manifests
+// (the DB-backed endpoints) streams the upload straight through chunking
+// into SQLite, so raising this doesn't cost more RAM, just allows bigger
+// files. /encode and /decode (the stateless, Bundle/zip endpoints) still
+// hold their payload in memory, so treat this cap more conservatively if
+// those see traffic too.
+var maxUploadBytes int64 = 8 << 30 // 8GiB default
+
+// multipartMemoryThreshold bounds how much of a multipart upload
+// mime/multipart buffers in RAM before it spills the rest to its own temp
+// file — kept small and independent of maxUploadBytes so a large upload
+// never sits fully in memory just because the request-size cap is large.
+const multipartMemoryThreshold = 32 << 20 // 32MiB
 
 func main() {
 	addr := flag.String("addr", ":8085", "listen address")
 	dbPath := flag.String("db", "mosaic.db", "path to the shared SQLite database backing /manifests")
+	maxUploadMB := flag.Int64("max-upload-mb", 8192, "maximum request body size, in MiB, for every endpoint")
 	flag.Parse()
+	maxUploadBytes = *maxUploadMB << 20
 
 	db, err := sqlitestore.OpenDB(*dbPath)
 	if err != nil {
@@ -68,7 +81,11 @@ type server struct {
 // hash, so uploading identical content again just returns the same id.
 func (s *server) createManifest(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
-	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+	// A small maxMemory here is deliberate: above it, mime/multipart spills
+	// the upload to its own temp file instead of buffering it in RAM, so a
+	// multi-GB file never sits fully in memory just to get parsed out of
+	// the multipart body.
+	if err := r.ParseMultipartForm(multipartMemoryThreshold); err != nil {
 		http.Error(w, "file too large or malformed upload: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -79,14 +96,9 @@ func (s *server) createManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	raw, err := io.ReadAll(file)
-	if err != nil {
-		log.Printf("reading upload failed: %v", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	summary, err := sqlitestore.EncodeToDB(s.db, header.Filename, raw)
+	// file streams straight into chunking/hashing/compression and on into
+	// the database — nothing here reads it into a single []byte first.
+	summary, err := sqlitestore.EncodeToDB(s.db, header.Filename, file)
 	if err != nil {
 		http.Error(w, "encode failed: "+err.Error(), http.StatusUnprocessableEntity)
 		return
@@ -117,16 +129,23 @@ func (s *server) listManifests(w http.ResponseWriter, r *http.Request) {
 func (s *server) getManifest(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	summary, data, err := sqlitestore.DecodeFromDB(s.db, id)
+	// DecodeFromDB has already verified every chunk and the whole file's
+	// hash by the time it returns — rc is a spooled temp file, not a
+	// buffer, so reconstructing a multi-GB file doesn't hold it all in
+	// RAM. Headers go out before any of it is copied to w.
+	summary, rc, err := sqlitestore.DecodeFromDB(s.db, id)
 	if err != nil {
 		http.Error(w, "decode failed: "+err.Error(), http.StatusNotFound)
 		return
 	}
+	defer rc.Close()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, summary.Name))
 	w.Header().Set("X-Mosaic-Manifest-Id", summary.ID)
-	w.Write(data)
+	if _, err := io.Copy(w, rc); err != nil {
+		log.Printf("streaming reconstructed file failed after headers were sent: %v", err)
+	}
 }
 
 // handleEncode: POST /encode, multipart field "file" ->
@@ -140,7 +159,7 @@ func (s *server) getManifest(w http.ResponseWriter, r *http.Request) {
 // Stateless: nothing here touches the database backing /manifests.
 func handleEncode(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
-	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+	if err := r.ParseMultipartForm(multipartMemoryThreshold); err != nil {
 		http.Error(w, "file too large or malformed upload: "+err.Error(), http.StatusBadRequest)
 		return
 	}

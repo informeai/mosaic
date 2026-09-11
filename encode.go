@@ -2,13 +2,55 @@ package mosaic
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/klauspost/compress/zstd"
 )
+
+// ChunkAndCompressReader is the streaming counterpart to ChunkAndCompress:
+// it reads r exactly once, chunk by chunk, hashing and zstd-compressing as
+// it goes and handing each newly-seen unique chunk to onChunk immediately.
+// Memory use stays bounded by chunk size and the set of chunk hashes seen
+// so far (32 bytes each) — never by the size of r — which is what lets a
+// caller (a SQLite store writing rows as chunks arrive, say) encode a file
+// far larger than available RAM.
+//
+// chunkHashes still records every occurrence in order, duplicates
+// included — reconstruction needs that full sequence — but a duplicate is
+// not recompressed or handed to onChunk again. size is the total bytes
+// read from r (i.e. the original file size).
+func ChunkAndCompressReader(r io.Reader, onChunk func(h Hash, compressed []byte) error) (fileHash Hash, chunkHashes []Hash, size int64, err error) {
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		return Hash{}, nil, 0, err
+	}
+	defer enc.Close()
+
+	hasher := sha256.New()
+	seen := map[Hash]bool{}
+
+	err = splitChunks(io.TeeReader(r, hasher), func(data []byte) error {
+		size += int64(len(data))
+		h := HashBytes(data)
+		chunkHashes = append(chunkHashes, h)
+		if seen[h] {
+			return nil // repeated inside this file — already queued
+		}
+		seen[h] = true
+		return onChunk(h, enc.EncodeAll(data, nil))
+	})
+	if err != nil {
+		return Hash{}, nil, 0, fmt.Errorf("mosaic: chunking failed: %w", err)
+	}
+
+	copy(fileHash[:], hasher.Sum(nil))
+	return fileHash, chunkHashes, size, nil
+}
 
 // ChunkAndCompress splits raw into content-defined chunks and zstd-
 // compresses each unique one. It returns the full ordered list of chunk
@@ -17,26 +59,19 @@ import (
 //
 // Exported so alternate stores (e.g. a SQLite-backed one) outside this
 // package can produce chunks the same way Encode/EncodeBundle do, without
-// duplicating the chunking/compression logic.
+// duplicating the chunking/compression logic. It holds every unique
+// chunk's compressed bytes in units at once, which is fine for the
+// pattern-directory and Bundle use cases (both already need the whole
+// file in memory anyway) — a caller that can't afford that should use
+// ChunkAndCompressReader instead.
 func ChunkAndCompress(raw []byte) (chunkHashes []Hash, units map[Hash][]byte, err error) {
-	enc, err := zstd.NewWriter(nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer enc.Close()
-
 	units = map[Hash][]byte{}
-	err = splitChunks(bytes.NewReader(raw), func(data []byte) error {
-		h := HashBytes(data)
-		chunkHashes = append(chunkHashes, h)
-		if _, ok := units[h]; ok {
-			return nil // repeated inside this file — already queued
-		}
-		units[h] = enc.EncodeAll(data, nil)
+	_, chunkHashes, _, err = ChunkAndCompressReader(bytes.NewReader(raw), func(h Hash, compressed []byte) error {
+		units[h] = compressed
 		return nil
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("mosaic: chunking failed: %w", err)
+		return nil, nil, err
 	}
 	return chunkHashes, units, nil
 }
